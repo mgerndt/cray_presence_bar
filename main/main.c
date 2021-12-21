@@ -190,7 +190,7 @@ uint64_t get_echo(uint32_t pin, uint32_t timeout) {
 long minDist;
 long maxDist;
 
-#define REPETITIONS 3
+#define REPETITIONS 1
 
 /*The measured distance from the range 0 to 400 Centimeters*/
 long measureInCentimeters(uint32_t pin) {
@@ -223,7 +223,7 @@ long measureInCentimeters(uint32_t pin) {
 
         delay_microseconds(500);
     }
-    ESP_LOGI("DISTANCE","min: %ld  max: %ld", minDist, maxDist );
+    //ESP_LOGI("DISTANCE","min: %ld  max: %ld", minDist, maxDist ); 
 
     return averDist/REPETITIONS;
 }
@@ -244,14 +244,14 @@ int distanceMeasurementCM(void){
     // distance[7]=6;
 
 
-    distance[0]=measureInCentimeters(U1_GPIO); delay_microseconds(10);
-    distance[1]=measureInCentimeters(U2_GPIO); delay_microseconds(10);
-    distance[2]=measureInCentimeters(U3_GPIO); delay_microseconds(10);
-    distance[3]=measureInCentimeters(U4_GPIO); delay_microseconds(10);
-    distance[4]=measureInCentimeters(U5_GPIO); delay_microseconds(10);
-    distance[5]=measureInCentimeters(U6_GPIO); delay_microseconds(10);
-    distance[6]=measureInCentimeters(U7_GPIO); delay_microseconds(10);
-    distance[7]=measureInCentimeters(U8_GPIO); delay_microseconds(10);
+    distance[0]=measureInCentimeters(U1_GPIO); //delay_microseconds(10);
+    distance[1]=measureInCentimeters(U2_GPIO); //delay_microseconds(10);
+    distance[2]=measureInCentimeters(U3_GPIO); //delay_microseconds(10);
+    distance[3]=measureInCentimeters(U4_GPIO); //delay_microseconds(10);
+    distance[4]=measureInCentimeters(U5_GPIO); //delay_microseconds(10);
+    distance[5]=measureInCentimeters(U6_GPIO); //delay_microseconds(10);
+    distance[6]=measureInCentimeters(U7_GPIO); //delay_microseconds(10);
+    distance[7]=measureInCentimeters(U8_GPIO); //delay_microseconds(10);
 
     for (int i=0;i<8;i++){
         if (distance[i]<distance[minIndex]) minIndex=i;
@@ -329,7 +329,7 @@ void sendBeam(int distance){
 void showPosition(int distance){
     distance = min(330,distance);
     distance = max(10,distance);
-    ESP_LOGI("DISTANCE","Distance %d",distance);
+    ESP_LOGI("DISTANCE","Show position distance %d",distance);
     int firstLED =  (int)(((float)distance-10.0) / 3.3);
     int lastLED = (int)(((float)distance+10.0) / 3.3);
 
@@ -339,7 +339,7 @@ void showPosition(int distance){
             .blue = 0,
         };
 
-    eraseLEDStrip();
+    //eraseLEDStrip();
 
     uint32_t freestack;
     freestack=uxTaskGetStackHighWaterMark(NULL);
@@ -356,7 +356,7 @@ void showPosition(int distance){
 
    freestack=uxTaskGetStackHighWaterMark(NULL);
     //ESP_LOGI("DISTANCE","Free stack space: %d  ",freestack);
-    vTaskDelay(pdMS_TO_TICKS(500));
+    vTaskDelay(pdMS_TO_TICKS(50));
 }
 
 
@@ -391,10 +391,10 @@ void visualizePositionTask(void *pvParameters)
         int distance=0;
 
         distance=distanceMeasurementCM();
-        ESP_LOGI("DISTANCE","Distance: %d", distance );
+        //ESP_LOGI("DISTANCE","Distance: %d", distance );
         if (distance>0) {
             showPosition(distance);
-            ESP_LOGI("DISTANCE","Timer reset");
+            //ESP_LOGI("DISTANCE","Timer reset");
             if (xTimerReset(deepSleepTimer,1000U)!=pdPASS){
                 ESP_LOGE("DISTANCE","Timer reset failed."); 
             };
