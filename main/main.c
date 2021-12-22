@@ -14,10 +14,16 @@
 #include "presence_bar.h"
 #include "esp_sleep.h"
 #include <esp_task_wdt.h> 
+#include "wifiInit.h"
+#include "timeMgmt.h"
+#include "mqtt.h"
+#include "esp_sntp.h"
 
 #include <stdio.h>
 
 TimerHandle_t deepSleepTimer;
+QueueHandle_t detections;
+SemaphoreHandle_t publishDetectionsSemaphore = NULL;
 
 /**
    This interrupt handler is called whenever the outer photoelectric barrier is broken.
@@ -191,6 +197,9 @@ long minDist;
 long maxDist;
 
 #define REPETITIONS 1
+int measurementDelay=9000;
+int lowThreshold=20, highThreshold=135;
+
 
 /*The measured distance from the range 0 to 400 Centimeters*/
 long measureInCentimeters(uint32_t pin) {
@@ -212,18 +221,14 @@ long measureInCentimeters(uint32_t pin) {
         duration = get_echo(pin, 100000L);
         long rangeInCentimeters;
         rangeInCentimeters = duration / 29 / 2;
-        if (rangeInCentimeters>3 && rangeInCentimeters<530 && minDist>rangeInCentimeters) minDist=rangeInCentimeters;
-        if (rangeInCentimeters>3  && rangeInCentimeters<530 && maxDist<rangeInCentimeters) maxDist=rangeInCentimeters;
-        if (rangeInCentimeters>3 && rangeInCentimeters<530 ){
-            if (averDist==0) 
-                averDist=rangeInCentimeters;
-            else 
-                averDist+=rangeInCentimeters;
+        if (rangeInCentimeters>lowThreshold && rangeInCentimeters<highThreshold){
+            if (minDist>rangeInCentimeters) minDist=rangeInCentimeters;
+            if (maxDist<rangeInCentimeters) maxDist=rangeInCentimeters;
+            averDist+=rangeInCentimeters;
         }
-
         delay_microseconds(500);
     }
-    //ESP_LOGI("DISTANCE","min: %ld  max: %ld", minDist, maxDist ); 
+    //ESP_LOGI("DISTANCE","min: %ld  max: %ld avg: %ld", minDist, maxDist, averDist/REPETITIONS ); 
 
     return averDist/REPETITIONS;
 }
@@ -232,32 +237,45 @@ long measureInCentimeters(uint32_t pin) {
 int distanceMeasurementCM(void){
     long distance[8];
     int cm;
-    int minIndex=0;
+    int minIndex=-1;
+    static int call=0;
+
+    //if (call>10) return(-1);
+    //call++;
+
     
-    // distance[0]=130;
-    // distance[1]=130;
-    // distance[2]=12;
-    // distance[3]=130;
-    // distance[4]=130;
-    // distance[5]=130;
-    // distance[6]=130;
-    // distance[7]=6;
+    distance[0]=0;
+    distance[1]=0;
+    distance[2]=0;
+    distance[3]=0;
+    distance[4]=0;
+    distance[5]=0;
+    distance[6]=0;
+    distance[7]=0;
 
-
-    distance[0]=measureInCentimeters(U1_GPIO); //delay_microseconds(10);
-    distance[1]=measureInCentimeters(U2_GPIO); //delay_microseconds(10);
-    distance[2]=measureInCentimeters(U3_GPIO); //delay_microseconds(10);
-    distance[3]=measureInCentimeters(U4_GPIO); //delay_microseconds(10);
-    distance[4]=measureInCentimeters(U5_GPIO); //delay_microseconds(10);
-    distance[5]=measureInCentimeters(U6_GPIO); //delay_microseconds(10);
-    distance[6]=measureInCentimeters(U7_GPIO); //delay_microseconds(10);
-    distance[7]=measureInCentimeters(U8_GPIO); //delay_microseconds(10);
-
+    distance[0]=measureInCentimeters(U1_GPIO); delay_microseconds(measurementDelay);
+    distance[1]=measureInCentimeters(U2_GPIO); delay_microseconds(measurementDelay);
+    distance[2]=measureInCentimeters(U3_GPIO); delay_microseconds(measurementDelay);
+    distance[3]=measureInCentimeters(U4_GPIO); delay_microseconds(measurementDelay);
+    distance[4]=measureInCentimeters(U5_GPIO); delay_microseconds(measurementDelay);
+    distance[5]=measureInCentimeters(U6_GPIO); delay_microseconds(measurementDelay);
+    distance[6]=measureInCentimeters(U7_GPIO); delay_microseconds(measurementDelay);
+    distance[7]=measureInCentimeters(U8_GPIO); delay_microseconds(measurementDelay);
+    //delay_microseconds(10000000);
+ 
+    //ESP_LOGI("DISTANCE", "\n\n");
     for (int i=0;i<8;i++){
-        if (distance[i]<distance[minIndex]) minIndex=i;
+        if (distance[i]!=0) {
+            ESP_LOGI("DISTANCE", "Sensor %d: %ld", i, distance[i]);
+            if (minIndex== -1) 
+                minIndex=i;
+            else
+                if (distance[i]<distance[minIndex]) minIndex=i;
+        }
     }
+    if (minIndex>-1) ESP_LOGI("DISTANCE", "minIndex: %d",minIndex);
 
-    if (distance[minIndex]>100){
+    if (minIndex== -1 || distance[minIndex]>highThreshold){
         cm = -1;
     } else {
         cm=47*(minIndex+1)-23+8;
@@ -341,8 +359,8 @@ void showPosition(int distance){
 
     //eraseLEDStrip();
 
-    uint32_t freestack;
-    freestack=uxTaskGetStackHighWaterMark(NULL);
+    //uint32_t freestack;
+    //freestack=uxTaskGetStackHighWaterMark(NULL);
     //ESP_LOGI("DISTANCE","Free stack space: %d  ",freestack);
     ESP_LOGI("DISTANCE","lirstLED: %d  ",firstLED);
     ESP_LOGI("DISTANCE","lastLED: %d  ",lastLED);
@@ -354,13 +372,13 @@ void showPosition(int distance){
     led_strip_show(&led_strip);
 
 
-   freestack=uxTaskGetStackHighWaterMark(NULL);
+   //freestack=uxTaskGetStackHighWaterMark(NULL);
     //ESP_LOGI("DISTANCE","Free stack space: %d  ",freestack);
     vTaskDelay(pdMS_TO_TICKS(50));
 }
 
 
-void demoBeam(){
+void startBeam(){
 
     struct led_color_t led_color = {
             .red = 0,
@@ -373,31 +391,69 @@ void demoBeam(){
             led_strip_set_pixel_color(&led_strip, index%LED_STRIP_LENGTH, &led_color);
     }
 
-    uint32_t freestack;
-    freestack=uxTaskGetStackHighWaterMark(NULL);
-    ESP_LOGI("DISTANCE","Free stack space: %d  ",freestack);
     led_strip_show(&led_strip);
-    freestack=uxTaskGetStackHighWaterMark(NULL);
-    ESP_LOGI("DISTANCE","Free stack space: %d  ",freestack);
     vTaskDelay(pdMS_TO_TICKS(500));
     eraseLEDStrip();
 }
 
+void stopBeam(){
+
+    struct led_color_t led_color = {
+            .red = 200,
+            .green = 0,
+            .blue = 0,
+        };
+
+     //eraseLEDStrip();
+    for (uint32_t index = 0; index<LED_STRIP_LENGTH;index++) {
+            led_strip_set_pixel_color(&led_strip, index%LED_STRIP_LENGTH, &led_color);
+    }
+
+
+    led_strip_show(&led_strip);
+    vTaskDelay(pdMS_TO_TICKS(1000));
+    eraseLEDStrip();
+    vTaskDelay(pdMS_TO_TICKS(1000));
+
+}
+
+struct detection {
+    time_t timestamp;
+    int distance;
+};
+
 void visualizePositionTask(void *pvParameters)
 {
+    int lastDistance=0;
+    int distance=0;
 
     while (1)
     {
-        int distance=0;
-
+ 
         distance=distanceMeasurementCM();
-        //ESP_LOGI("DISTANCE","Distance: %d", distance );
-        if (distance>0) {
+        if (distance != -1) {
+            ESP_LOGI("DISTANCE","Distance: %d\n", distance );
             showPosition(distance);
-            //ESP_LOGI("DISTANCE","Timer reset");
+        }
+        
+        if (distance>0 && distance!=lastDistance) {
+            lastDistance=distance;
+            ESP_LOGI("DISTANCE","Timer reset");
             if (xTimerReset(deepSleepTimer,1000U)!=pdPASS){
-                ESP_LOGE("DISTANCE","Timer reset failed."); 
+                 ESP_LOGE("DISTANCE","Timer reset failed."); 
             };
+
+            time_t now = 0;
+	        time(&now);
+            struct detection event;
+            event.timestamp=now;
+            event.distance=distance; 
+            BaseType_t xStatus = xQueueSendToBack(detections, &event, 0);
+            if( xStatus != pdPASS ) {
+                ESP_LOGI("DISTANCE", "Queue Detections is full." );
+            }
+
+            
         }
         else
             eraseLEDStrip();
@@ -408,18 +464,69 @@ void visualizePositionTask(void *pvParameters)
     }
 }
 
+void publishDetectionsTask(void *pvParameters){
 
+    while(true){
+
+        xSemaphoreTake(publishDetectionsSemaphore, portMAX_DELAY);
+
+        int numberEvents=uxQueueMessagesWaiting(detections);
+
+        if (numberEvents>0){
+            ESP_LOGI("PUBLISH_DETECTIONS","%d events to publish", numberEvents);  
+            wifi_init_sta();
+            time_t now1 = 0;
+            time(&now1);
+            initialize_sntp();
+            time_t now2 = 0;
+            time(&now2);
+            time_t timeshift=now2-now1;
+            init_mqtt();
+
+            struct detection event;
+            BaseType_t xStatus = xQueueReceive(detections, &event, 0);
+            while (xStatus == pdPASS){
+                event.timestamp=event.timestamp+timeshift;
+                mqttPublish(event.timestamp, event.distance);
+                xStatus = xQueueReceive(detections, &event, 0);
+            }
+        }
+        xSemaphoreGive(publishDetectionsSemaphore);
+    }
+}
 
 void triggerDeepSleep(TimerHandle_t xTimer){
-    ESP_LOGI("DISTANCE","Go into deep sleep");     
+    ESP_LOGI("DISTANCE","Publish detections");   
+    //publishDetections();  
+    xSemaphoreGive(publishDetectionsSemaphore);
+    vTaskDelay(pdMS_TO_TICKS(1000));  
+    xSemaphoreTake(publishDetectionsSemaphore, portMAX_DELAY);
+    vTaskDelay(pdMS_TO_TICKS(5000));  
+
+    stopBeam();
+    xSemaphoreTake(led_strip.access_semaphore, portMAX_DELAY);
+    ESP_LOGI("DISTANCE","Go into deep sleep"); 
+
     esp_deep_sleep_start();
 }
+
+
+
 
 void app_main()
 {
 
-esp_task_wdt_init(30, false);
+    esp_task_wdt_init(200, false);
  
+    detections = xQueueCreate(100, sizeof(struct detection));
+    publishDetectionsSemaphore = xSemaphoreCreateBinary();
+    if( publishDetectionsSemaphore == NULL ) {
+        ESP_LOGE("DISTANCE","publishDetectionsSemaphore could not be created.");    
+    }
+    ESP_LOGI("DISTANCE","try to take");     
+    //xSemaphoreTake(publishDetectionsSemaphore, portMAX_DELAY);
+    ESP_LOGI("DISTANCE","taken");     
+
     nvs_flash_init();
     gpio_install_isr_service(0);
 
@@ -427,7 +534,7 @@ esp_task_wdt_init(30, false);
     bool led_init_ok = led_strip_init(&led_strip);
     assert(led_init_ok);
 
-    demoBeam();
+    startBeam();
 
 
 
@@ -445,4 +552,5 @@ esp_task_wdt_init(30, false);
     esp_sleep_enable_ext1_wakeup(BUTTON_PIN_BITMASK,ESP_EXT1_WAKEUP_ANY_HIGH);
 
     xTaskCreate(visualizePositionTask, "measure_visualize", configMINIMAL_STACK_SIZE * 8, NULL, 1, NULL);
+    xTaskCreate(publishDetectionsTask, "publish_detections", configMINIMAL_STACK_SIZE * 8, NULL, 1, NULL);
 }
